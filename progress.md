@@ -10,8 +10,8 @@ Live tracker for the build laid out in [PLAN.md](./PLAN.md). Each phase has a
 | 2 — FastAPI skeleton + DB repo + deterministic embedder | done | 15 tests, 92.7% coverage; `GET /v1/events/{id}` real; `POST /v1/memories` is a 501 stub until Phase 5 |
 | 3 — Restate runtime + echo workflow | done | `just up` composes pg + restate + worker + register; `curl :8080/memory/echo` round-trips through the runtime |
 | 4 — OpenRouter wrapper + Mem0 prompts | done | `extract_facts` + `decide_actions` typed wrappers, prompts lifted verbatim, 25 respx-mocked tests, coverage 91% |
-| 5 — Durable `add_memory` E2E | next | the six-step `ctx.run` workflow in ARCH §6; `POST /v1/memories` send-invokes it |
-| 6 — Chaos test (the headline) | pending | kill worker mid-extract; assert respx OpenRouter call count == 1 |
+| 5 — Durable `add_memory` E2E | done | six-step `ctx.run` workflow registered with Restate; `POST /v1/memories` send-invokes it and returns PENDING; 47 tests, 93.7% coverage |
+| 6 — Chaos test (the headline) | next | kill worker mid-extract; assert fake OpenRouter call count == 2 |
 
 ---
 
@@ -107,23 +107,66 @@ decide), all respx-mocked at the httpx transport. Coverage 91.5% (floor
 bumped to 85%). `openai` SDK's built-in `max_retries=3` covers the 429
 case — verified by the side-effect-sequence test.
 
+## Phase 5 — done
+
+`src/prepr_mem0/workflow/add_memory.py` defines a `restate.Workflow`
+keyed by `event_id`. The workflow body is a pure function
+`run_add_memory(ctx, req)` that takes a duck-typed `ctx` so unit tests
+can drive it with a `FakeContext`. Six journaled steps in order:
+
+    create_event -> extract_facts -> knn:0..N -> decide_actions
+    -> apply_actions -> finish_event
+
+Each step lives in `_steps.py` as a thin wrapper that opens its own
+`session_scope()` and returns JSON-friendly values (dicts of strings,
+not dataclasses or UUIDs) so Restate's default serde can journal them.
+The workflow body converts back to `Neighbor` / `DecidedAction` at the
+boundary.
+
+The Restate registration response now lists both `memory.echo` and
+`add_memory.run`. `POST /v1/memories` was rewritten to `generic_send`
+into Restate ingress and return `{event_id, status: PENDING}`; the
+generated `event_id` becomes the workflow key.
+
+Tests:
+
+- 4 unit tests in `tests/unit/workflow/test_add_orders_steps.py` with
+  a `FakeContext` that records `ctx.run` calls. Asserts step order, the
+  per-fact `knn:i` naming, and that `decide_actions` receives neighbors
+  shaped `list[list[Neighbor]]`.
+- 3 integration tests in `tests/integration/test_workflow.py` running
+  the workflow body against the real Postgres with respx-mocked
+  OpenRouter. Covers the happy path (two ADDs end up in memories +
+  history + event row), reconciliation (NONE leaves the seeded row
+  alone), and apply-failure (event stays PENDING, no memories written).
+
+Skipped: a real-Restate-process e2e test. respx is process-local and
+can't mock httpx in the worker subprocess. Phase 6's fake_openrouter
+HTTP server is the right tool for that — it'll be reused as the durable
+call counter for the chaos test.
+
+Snag worth flagging: Restate's Python client speaks HTTP/2 to the
+ingress, so `httpx[http2]` (which pulls in `h2`) had to go into the
+project dependencies. Without it, `restate_client()` raises an
+ImportError at first connect.
+
 ## Next session
 
-Open Phase 5 — the durable `add_memory` workflow.
+Open Phase 6 — the chaos test.
 
 Build order:
 
-1. Failing unit tests in `tests/unit/workflow/test_add_orders_steps.py`
-   driven by a fake `Context` that records `ctx.run` calls — assert step
-   order matches `["create_event", "extract_facts", "knn:0..N",
-   "decide_actions", "apply_actions", "finish_event"]`.
-2. Implement `src/prepr_mem0/workflow/add_memory.py` as a
-   `restate.Workflow` keyed by `event_id`.
-3. Replace the 501 in `src/prepr_mem0/api/app.py` with a Restate
-   send-invoke that returns `{event_id, status: PENDING}`.
-4. Register the new handler in `workflow/asgi.py`; bounce `just up` to
-   push the deployment.
-5. E2E test in `tests/e2e/test_add_flow.py` — POST → poll
-   `/v1/events/{id}` → assert SUCCEEDED + ADD entries in memories table.
-   Worker keeps `OPENROUTER_API_KEY=test-key` and a session-scoped respx
-   intercept on `openrouter.ai/api/v1`.
+1. `tests/chaos/fake_openrouter.py` — a tiny FastAPI app on :9999 that
+   serves canned `/chat/completions` responses and appends each request
+   to `/tmp/openrouter_calls.jsonl`. The file is the durable call
+   counter across worker restarts.
+2. `src/prepr_mem0/workflow/chaos.py` — `maybe_crash(hook)` that calls
+   `os._exit(1)` when `CHAOS_AT=$hook` is set. Wire one call into the
+   workflow body right after `extract_facts` completes.
+3. `tests/chaos/test_resume_after_crash.py` — wipe the jsonl, start
+   the fake server, restart the worker with `CHAOS_AT=after_extract_facts`
+   and `OPENROUTER_BASE_URL=http://host.docker.internal:9999`, POST,
+   wait for crash, restart worker without `CHAOS_AT`, poll until
+   SUCCEEDED, assert the jsonl line count is exactly 2.
+4. `just chaos` target + `scripts/chaos.sh` wrapper.
+5. Bump coverage floor / re-verify.

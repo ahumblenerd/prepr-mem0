@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, status
 
@@ -22,6 +22,7 @@ from prepr_mem0.schemas import (
     EventStatusResponse,
 )
 from prepr_mem0.schemas.api import AppliedAction
+from prepr_mem0.workflow.client import restate_client
 
 app = FastAPI(
     title="prepr-mem0",
@@ -48,12 +49,17 @@ async def healthz() -> dict[str, bool]:
     summary="Enqueue the add_memory durable workflow",
 )
 async def add_memories(req: AddRequest) -> AddResult:
-    # Phase 5 will replace this with a Restate send-invoke. Until then, 501.
-    _ = req
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="add_memory workflow not yet wired — see Phase 5",
-    )
+    """Send-invoke the durable workflow keyed by a fresh event_id."""
+    event_id = uuid4()
+    payload = req.model_dump_json().encode("utf-8")
+    async with restate_client() as client:
+        await client.generic_send(
+            service="add_memory",
+            handler="run",
+            arg=payload,
+            key=str(event_id),
+        )
+    return AddResult(event_id=event_id, status="PENDING")
 
 
 @app.get(

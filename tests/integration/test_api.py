@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import sys
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import prepr_mem0.api.app  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from prepr_mem0.api import app
 from prepr_mem0.db.repo import AppliedAction, Repo
+
+app_mod = sys.modules["prepr_mem0.api.app"]
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,12 +39,36 @@ async def test_openapi_lists_v1_paths(client):
     assert "/v1/events/{event_id}" in paths
 
 
-async def test_add_memories_returns_501_stub(client):
+async def test_add_memories_send_invokes_restate(client, monkeypatch):
+    """POST returns 202 PENDING and forwards the payload to Restate."""
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def generic_send(self, **kwargs):
+            captured.update(kwargs)
+
+    @asynccontextmanager
+    async def _fake_client():
+        yield _FakeClient()
+
+    monkeypatch.setattr(app_mod, "restate_client", _fake_client)
+
     r = await client.post(
         "/v1/memories",
         json={"user_id": "alice", "messages": [{"role": "user", "content": "hi"}]},
     )
-    assert r.status_code == 501
+    assert r.status_code == 202
+    body = r.json()
+    assert body["status"] == "PENDING"
+    assert captured["service"] == "add_memory"
+    assert captured["handler"] == "run"
+    assert captured["key"] == body["event_id"]
 
 
 async def test_add_memories_validates_payload(client):

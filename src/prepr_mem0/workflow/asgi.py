@@ -9,6 +9,6 @@ from __future__ import annotations
 
 import restate
 
-from prepr_mem0.workflow import echo_service
+from prepr_mem0.workflow import add_memory_wf, echo_service
 
-app = restate.app(services=[echo_service])
+app = restate.app(services=[echo_service, add_memory_wf])
