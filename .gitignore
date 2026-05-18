@@ -26,3 +26,6 @@ sdk-python/.venv/
 .api.log
 docs.md
 docs/
+.coverage
+htmlcov/
+.cache/
