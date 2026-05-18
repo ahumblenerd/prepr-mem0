@@ -13,6 +13,7 @@ dependencies = [
   "pgvector>=0.3.6",
   "pydantic>=2.10.0",
   "restate-sdk>=0.18.0",
+  "openai>=2.37.0",
 ]
 
 [dependency-groups]
@@ -72,6 +73,8 @@ unfixable = ["F401"]  # don't silently remove unused imports during a fix
   "INP001", # implicit namespace package
 ]
 "src/prepr_mem0/__init__.py" = ["D104"]
+# Prompts are verbatim assets from upstream mem0; line length is theirs.
+"src/prepr_mem0/llm/prompts.py" = ["E501"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -110,7 +113,7 @@ exclude_dirs = ["tests", "sdk-python", ".venv"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-addopts = "-x --strict-markers --strict-config --cov=src/prepr_mem0 --cov-report=term-missing --cov-fail-under=80"
+addopts = "-x --strict-markers --strict-config --cov=src/prepr_mem0 --cov-report=term-missing --cov-fail-under=85"
 testpaths = ["tests"]
 markers = [
   "integration: hits real services (Postgres, Restate)",
