@@ -42,37 +42,103 @@ Exactly the workload durable execution exists for.
 
 ## 3. Component diagram
 
+This is the shape that's actually running on disk and verified end-to-end
+against real Anthropic Claude Haiku 4.5 via OpenRouter:
+
 ```
-+---------------------+     POST /v1/memories        +-----------------------+
-|   Caller / Test     | ---------------------------> |   FastAPI (edge)      |
-|   (curl, gen SDK)   |  <-- {event_id, PENDING} --- |  /openapi.json,/docs  |
-+---------------------+                              +-----------+-----------+
-                                                                 |
-                                                  send-invoke    |  HTTP/2 ingress
-                                                                 v
-                          +-------------------------- Restate Runtime ------------------------+
-                          |   journals + retries + replay + state + scheduler                 |
-                          |                                                                   |
-                          |   workflow add_memory(req)  :: durable service                    |
-                          |     1. ctx.run("extract_facts")  -> OpenRouter (Side Effect)      |
-                          |     2. ctx.run("search_neighbors", per-fact, parallel) -> pgvec   |
-                          |     3. ctx.run("decide_actions") -> OpenRouter (Side Effect)      |
-                          |     4. ctx.run("apply_actions")  -> Postgres tx (mem + history)   |
-                          |     5. set event status = SUCCEEDED                               |
-                          +-------------------+---------------------+-------------------------+
-                                              |                     |
-                              +---------------v------+    +---------v-----------+
-                              |  OpenRouter (LLM)    |    | Postgres + pgvector |
-                              |  models: openrouter/*|    |  memories, history, |
-                              |                      |    |  events             |
-                              +----------------------+    +---------------------+
+┌─────────────┐      POST /v1/memories                  ┌─────────────────────┐
+│   Caller    │ ──────────────────────────────────────► │   FastAPI (:8000)   │
+│  curl / SDK │                                          │   prepr_mem0.api    │
+│             │ ◄── 202 { event_id, "PENDING" } ──────  │   /healthz /docs    │
+└─────────────┘                                          └──────────┬──────────┘
+                                                                    │
+                                                                    │  generic_send(
+                                                                    │    service="add_memory",
+                                                                    │    key=event_id,
+                                                                    │    arg=AddRequest JSON,
+                                                                    │    content-type=application/json)
+                                                                    ▼
+                            ┌─────────────────────────────────────────────────────────────┐
+                            │              Restate runtime (:8080 ingress, :9070 admin)   │
+                            │ ─────────────────────────────────────────────────────────── │
+                            │  • Journals each ctx.run(...) step + its serialized result  │
+                            │  • Retries on transient failure                             │
+                            │  • Replays journal on worker crash (= no double LLM calls)  │
+                            └─────────────────────────────┬───────────────────────────────┘
+                                                          │
+                                              HTTP/2      │  POST /invoke/add_memory/run
+                                                          ▼
+                                ┌────────────────────────────────────────────────────────┐
+                                │   Worker (:9080) — uvicorn(prepr_mem0.workflow.asgi)    │
+                                │ ────────────────────────────────────────────────────── │
+                                │   add_memory_wf @ Workflow keyed by event_id           │
+                                │                                                        │
+                                │   async def run_add_memory(ctx, req):                  │
+                                │     event_id = UUID(ctx.key())                         │
+                                │     ↓                                                  │
+                                │  [1] ctx.run("create_event",  …)          ──► Postgres │
+                                │     ↓                                                  │
+                                │  [2] ctx.run("extract_facts", …)          ──► OpenRouter (LLM call #1)
+                                │     ↓                          maybe_crash("after_extract_facts")
+                                │  [3] for i,fact in enumerate(facts):                   │
+                                │       ctx.run(f"knn:{i}", …)            ──► Postgres + pgvector
+                                │     ↓                                                  │
+                                │  [4] ctx.run("decide_actions", …)         ──► OpenRouter (LLM call #2)
+                                │     ↓                            (UUIDs remapped to small ints
+                                │     ↓                             so Haiku doesn't hallucinate them)
+                                │  [5] ctx.run("apply_actions", …)          ──► Postgres tx
+                                │       (writes memories + memory_history atomically)    │
+                                │     ↓                                                  │
+                                │  [6] ctx.run("finish_event", …)           ──► Postgres │
+                                │     ↓                                                  │
+                                │   return AddResult(event_id, "SUCCEEDED")              │
+                                └───────────────┬──────────────────────┬─────────────────┘
+                                                │                      │
+                              ┌─────────────────▼────────┐   ┌─────────▼─────────────────┐
+                              │   OpenRouter             │   │   Postgres 16 + pgvector  │
+                              │   openai SDK +           │   │   (Docker, tmpfs PGDATA)  │
+                              │   base_url override      │   │                           │
+                              │                          │   │   ┌─────────────────────┐ │
+                              │   anthropic/             │   │   │ memories            │ │
+                              │   claude-haiku-4.5       │   │   │  id, user_id,       │ │
+                              │                          │   │   │  content, embedding │ │
+                              │   2 calls/workflow:      │   │   │  (vector(1536))     │ │
+                              │   • USER_MEMORY_EXTRACT  │   │   └─────────────────────┘ │
+                              │   • update_memory_       │   │   ┌─────────────────────┐ │
+                              │     template (decide)    │   │   │ memory_history      │ │
+                              │                          │   │   │  ADD/UPDATE/DELETE  │ │
+                              │   respx-mocked in        │   │   └─────────────────────┘ │
+                              │   tests; fake_openrouter │   │   ┌─────────────────────┐ │
+                              │   server in chaos run    │   │   │ add_events          │ │
+                              │                          │   │   │  PENDING|RUNNING|   │ │
+                              │                          │   │   │  SUCCEEDED|FAILED   │ │
+                              │                          │   │   │  + result jsonb     │ │
+                              │                          │   │   └─────────────────────┘ │
+                              └──────────────────────────┘   └───────────────────────────┘
+
+                              GET /v1/events/{event_id}   ──► reads add_events directly
+                                                              (no Restate involved)
 ```
 
-Restate is a sidecar **runtime**. Our Python "workflow service" is a normal HTTP
-service Restate calls into; it replies with journal entries Restate persists. On
-crash/restart, Restate re-invokes us and feeds back the journal so any side effect
-that already returned is **not re-executed**. That is what makes the LLM calls and
-DB writes safe under retry without homegrown idempotency keys.
+**Read this as:** FastAPI is a thin edge that does nothing except generate
+an event_id and `send_invoke` the durable workflow. The workflow body is a
+plain async Python function — six `ctx.run(...)` calls in a row. Restate's
+job is to journal each step's return value, so when the worker dies after
+`extract_facts` returns, the restarted worker replays from the journal and
+the cached `["Name is Arun", ...]` list is returned instead of re-calling
+OpenRouter. That is the entire durability story in one sentence.
+
+**What Restate isn't doing:** retries-of-our-own, idempotency keys,
+dedup table, distributed locks. It's all journal-and-replay. The DB
+transaction inside `apply_actions` is the only homegrown atomicity
+we keep, because writing memories + memory_history is one logical
+write and we don't want a partial state if `_apply_actions_tx`
+crashes mid-loop.
+
+**Verified end-to-end on 2026-05-18** against Anthropic Claude Haiku
+4.5 via OpenRouter: POST → SUCCEEDED in ~4s, three facts extracted
+from `"My name is Arun, I drink earl grey tea every morning, and my
+favorite city is Lisbon"` landed in `memories`.
 
 ## 4. Data model (Postgres)
 
