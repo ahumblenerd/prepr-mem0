@@ -5,7 +5,14 @@ description = "Durable Mem0-style memory API on Restate + FastAPI"
 requires-python = ">=3.12,<3.13"
 readme = "ARCH.md"
 authors = [{ name = "Arun" }]
-dependencies = []
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30.0",
+  "pgvector>=0.3.6",
+  "pydantic>=2.10.0",
+]
 
 [dependency-groups]
 dev = [
@@ -14,7 +21,11 @@ dev = [
   "bandit>=1.8.0",
   "pytest>=8.3.0",
   "pytest-asyncio>=0.25.0",
+  "pytest-cov>=6.0.0",
   "pre-commit>=4.0.0",
+  "httpx>=0.28.0",
+  "respx>=0.22.0",
+  "time-machine>=2.16.0",
 ]
 
 [build-system]
@@ -45,6 +56,10 @@ ignore = [
   "CPY",     # no copyright header required
   "FBT",     # boolean trap — overzealous on FastAPI handlers
   "PLR0913", # too-many-arguments — FastAPI handlers naturally violate
+  "TC001",   # typing-only first-party — SQLAlchemy mapped_column needs runtime types
+  "TC002",   # typing-only third-party — same as above for sqlalchemy / FastAPI
+  "TC003",   # typing-only stdlib — same as above
+  "B008",    # Depends() in defaults is the FastAPI idiom
 ]
 unfixable = ["F401"]  # don't silently remove unused imports during a fix
 
@@ -74,6 +89,13 @@ typeCheckingMode = "strict"
 reportMissingTypeStubs = "warning"
 reportUnknownMemberType = "warning"
 
+# Strict on src/, basic on tests/. Test fixtures pull in third-party untyped
+# returns (pytest, httpx) that aren't worth annotating around.
+executionEnvironments = [
+  { root = "src", reportUnknownMemberType = "warning" },
+  { root = "tests", reportUnknownMemberType = "none", reportUnknownVariableType = "none", reportUnknownParameterType = "none", reportUnknownArgumentType = "none", reportMissingParameterType = "none", reportMissingTypeArgument = "none", reportUntypedFunctionDecorator = "none", reportAttributeAccessIssue = "warning" },
+]
+
 # -----------------------------------------------------------------------------
 # Bandit — security baseline.
 # -----------------------------------------------------------------------------
@@ -85,9 +107,16 @@ exclude_dirs = ["tests", "sdk-python", ".venv"]
 # -----------------------------------------------------------------------------
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "-x --strict-markers --strict-config"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+addopts = "-x --strict-markers --strict-config --cov=src/prepr_mem0 --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]
 markers = [
   "integration: hits real services (Postgres, Restate)",
   "chaos: kills processes mid-flight; needs docker compose",
+  "live: hits real OpenRouter; gated by env",
 ]
+
+[tool.coverage.run]
+branch = true
+omit = ["src/prepr_mem0/__init__.py"]
