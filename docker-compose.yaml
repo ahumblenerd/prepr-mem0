@@ -1,0 +1,20 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: prepr_db
+    environment:
+      POSTGRES_USER: prepr
+      POSTGRES_PASSWORD: prepr
+      POSTGRES_DB: prepr
+      # tmpfs-backed PGDATA: instant boot, ephemeral on container stop.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prepr -d prepr"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped

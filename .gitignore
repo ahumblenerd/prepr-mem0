@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# Env / secrets
+.env
+.env.local
+
+# Build artifacts
+dist/
+build/
+
+# Generated SDKs — committed for drift check, but lock dirs ignored
+sdk-python/.venv/
+
+# OS
+.DS_Store
