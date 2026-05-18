@@ -12,6 +12,7 @@ dependencies = [
   "asyncpg>=0.30.0",
   "pgvector>=0.3.6",
   "pydantic>=2.10.0",
+  "restate-sdk>=0.18.0",
 ]
 
 [dependency-groups]

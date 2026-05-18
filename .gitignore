@@ -20,3 +20,9 @@ sdk-python/.venv/
 
 # OS
 .DS_Store
+.worker.pid
+.api.pid
+.worker.log
+.api.log
+docs.md
+docs/

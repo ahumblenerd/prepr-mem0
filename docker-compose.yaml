@@ -18,3 +18,22 @@ services:
       timeout: 2s
       retries: 30
     restart: unless-stopped
+
+  restate:
+    image: docker.restate.dev/restatedev/restate:1.4
+    container_name: prepr_restate
+    ports:
+      - "8080:8080"   # ingress — caller-visible
+      - "9070:9070"   # admin + UI
+      - "9071:9071"   # node-to-node (single-node fine)
+    environment:
+      RESTATE_LOG_FILTER: "restate=info"
+    # tmpfs Restate state, matches the rest of the dev infra.
+    tmpfs:
+      - /restate-data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9070/health || exit 1"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped

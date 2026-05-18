@@ -1,143 +1,99 @@
 # Progress
 
 Live tracker for the build laid out in [PLAN.md](./PLAN.md). Each phase has a
-**Verify** column an agent (or interviewer) can re-run from a clean checkout.
-
-Last updated: 2026-05-18.
+**Verify** column re-runnable from a clean checkout.
 
 | Phase | Status | One-line summary |
 | ----- | ------ | ---------------- |
-| 0 — Repo skeleton + quality gate | ✅ done | `just check` enforces ruff (ALL) + pyright strict + bandit + pytest |
-| 1 — Postgres + pgvector in compose | ✅ done | `just up-db && just migrate && just db-smoke` brings up `pgvector/pg16` on tmpfs with the 3-table schema |
-| 2 — FastAPI skeleton + auto OpenAPI | ⏭ next | stubs for the full Mem0 v1 surface, `/openapi.json` consumable |
-| 3 — DB repo + sync `search` and `get` | ⏳ pending | sqlalchemy 2.x async, alembic, deterministic-embedding stub |
-| 4 — Restate runtime + hello workflow | ⏳ pending | restate container in compose, `just register`, echo handler |
-| 5 — OpenRouter wrapper + prompts | ⏳ pending | lifted Mem0 prompts; mocked + live smoke |
-| 6 — Durable `add_memory` E2E | ⏳ pending | `POST /v1/memories` returns event_id, workflow runs to `SUCCEEDED` |
-| 7 — Chaos test | ⏳ pending | crash worker mid-flight; prove no double LLM call from journal |
-| 8 — Generated SDK + drift check | ⏳ pending | `openapi-python-client`, CI guard on diff |
-| 9 — Full lint gate in CI | ⏳ pending | `.github/workflows/ci.yaml` mirrors `just check` |
-| 10 — Observability | ⏳ pending | structlog + OTel spans; Restate UI exposed |
-| 11 — One-shot demo | ⏳ pending | `just demo` runs golden path + chaos + SDK smoke |
+| 0 — Repo skeleton + quality gate | done | `just check` enforces ruff (`ALL`) + pyright strict + bandit + pytest |
+| 1 — Postgres + pgvector in compose | done | `just up-db && just migrate && just db-smoke` brings up `pgvector/pg16` on tmpfs with the three-table schema |
+| 2 — FastAPI skeleton + DB repo + deterministic embedder | done | 15 tests, 92.7% coverage; `GET /v1/events/{id}` real; `POST /v1/memories` is a 501 stub until Phase 5 |
+| 3 — Restate runtime + echo workflow | done | `just up` composes pg + restate + worker + register; `curl :8080/memory/echo` round-trips through the runtime |
+| 4 — OpenRouter wrapper + Mem0 prompts | next | lift `USER_MEMORY_EXTRACTION_PROMPT` + `update_memory_template`; respx-mocked unit tests |
+| 5 — Durable `add_memory` E2E | pending | the six-step `ctx.run` workflow in ARCH §6; `POST /v1/memories` send-invokes it |
+| 6 — Chaos test (the headline) | pending | kill worker mid-extract; assert respx OpenRouter call count == 1 |
 
 ---
 
-## Phase 0 — Repo skeleton + quality gate ✅
+## Phase 0 — done
 
-**Files landed**
+`uv`-managed project, ruff `select = ALL` with a curated ignore list (`D`,
+`COM812`, `ISC001`, `FIX`, `TD`, `CPY`, `FBT`, `PLR0913`, `TC00*`, `B008`),
+pyright strict on `src/` and basic on `tests/`, bandit excluding tests,
+pytest with `asyncio_mode = auto`, session-scoped event loop for SQLAlchemy.
+pre-commit installed. `just check` is the single quality gate.
 
-```
-pyproject.toml              # ruff (select=ALL), pyright strict, bandit, pytest
-justfile                    # sync / fmt / check / lint / typecheck / security / test / hooks
-.pre-commit-config.yaml     # ruff + pyright + bandit + hygiene hooks
-.python-version             # 3.12
-.gitignore
-src/prepr_mem0/__init__.py
-tests/test_smoke.py
-```
+Verified: `just check` exits 0 clean; planted violation makes it fail; revert
+restores green.
 
-**Decisions**
+## Phase 1 — done
 
-- `uv` over `hatch` for package management — single fast resolver, no env activation gymnastics.
-- Ruff `select = ["ALL"]` with a curated ignore list (`D`, `COM812`, `ISC001`, `FIX`, `TD`, `CPY`, `FBT`, `PLR0913`). Maximally strict by default; turn off rules with intent.
-- Pyright strict mode for both `src/` and `tests/` — typing the tests is the cheapest way to make refactors safe.
-- Bandit excludes `tests/` only.
-- `just` over `make` — tab-character traps and shell quoting in Makefiles are the same source of pain we're trying to avoid in our actual workflow code.
+`pgvector/pg16` on tmpfs (port 5433 to avoid clashing with any host pg).
+`migrations/0001_init.sql` (idempotent) provisions `memories`, `memory_history`,
+`add_events` with CHECK constraints, partial indexes for soft-delete, and an
+`ivfflat` cosine index sized for a small dev table.
 
-**Verified**
+Verified: extensions present, all three tables present, 1536-d vector round-trips
+through pgvector with cosine distance to self = 0.
 
-| Check | Command | Expected | Got |
-| ----- | ------- | -------- | --- |
-| Sync resolves | `uv sync` | exit 0, Python 3.12.12 venv | ✅ |
-| Gate green | `just check` | exit 0 (ruff format, ruff lint, pyright, bandit, pytest) | ✅ exit 0 |
-| Gate fires on a plant | append `import os\nx=1` to `__init__.py`, `just check` | exit ≠ 0, fails on ruff format first | ✅ exit 1 |
-| After revert | `just check` | exit 0 again | ✅ exit 0 |
+## Phase 2 — done
 
-**Notes for next session**
+Schemas (`Message`, `AddRequest`, `AddResult`, `EventStatus`, `FactAction`,
+`AppliedAction`) in pydantic v2. SQLAlchemy 2.x async models matching the
+migration. `Repo` exposes `create_event` / `finish_event` / `get_event`,
+`knn`, `apply_actions_tx` (the atomic ADD/UPDATE/DELETE/NONE applier that
+mirrors mem0's `_add_to_vector_store`), plus `list_memories` and
+`history_for`. Deterministic SHA-256-seeded embedding stub — same text → same
+1536-d unit vector. FastAPI app with `/healthz`, `GET /v1/events/{id}`, and
+the `POST /v1/memories` 501 stub.
 
-- `just` was installed via Homebrew during Phase 0. Reversible with `brew uninstall just`.
-- Repo isn't a git init yet. Recommend `git init && git add -A && git commit -m "chore: phase 0+1"` before Phase 2 to get an undo button.
+Tests use `ASGITransport` + the live tmpfs Postgres (no testcontainers spin-up
+overhead). Session-scoped engine, per-test truncate. **15 tests, 92.7%
+coverage** — well above the 80% floor.
 
----
+Tuning notes:
 
-## Phase 1 — Postgres + pgvector in compose ✅
+- ruff `TC00*` + `B008` suppressed (wrong for SQLAlchemy `mapped_column` and
+  FastAPI `Depends`).
+- pyright relaxed on `tests/` only — pytest fixtures' untyped returns are not
+  worth annotating around.
+- Bandit `B324` md5 fixed properly with `usedforsecurity=False`; `B311` random
+  has a justification comment for the deterministic-seed use case.
 
-**Files landed**
+## Phase 3 — done
 
-```
-docker-compose.yaml         # pgvector/pgvector:pg16, tmpfs-backed PGDATA, port 5433
-migrations/0001_init.sql    # memories / memory_history / add_events + indexes
-scripts/migrate.sh          # lexical-order migration runner; replaced by alembic in Step 3
-justfile                    # +up-db, +down-db, +migrate, +db-shell, +db-sql, +db-smoke
-```
+`docker.restate.dev/restatedev/restate:1.4` added to compose with ports 8080
+(ingress), 9070 (admin), 9071. `src/prepr_mem0/workflow/echo.py` defines a
+`memory.echo` handler; `workflow/asgi.py` exposes the ASGI app via
+`restate.app([echo_service])`. `just up` composes everything: pg + restate +
+migrations + worker + registration. `scripts/register_workflow.sh` POSTs to
+the admin API with `use_http_11: true` and `force: true` so re-runs are
+idempotent.
 
-**Decisions**
+Verified manually: `curl -X POST :8080/memory/echo -d '"ping"'` returns
+`"ping"`. No formal integration test for it — Phase 5's e2e test exercises
+the same plumbing for real.
 
-- **Single Postgres for vectors + history + events** — mirrors ARCH.md §4. Collapsing Mem0's Qdrant+SQLite split into one source of truth removes the partial-write surface our durable workflow is meant to handle. The interview talking point is *why* a real deployment would split them again at scale (different IO profiles, vector index hot-path shouldn't share locks with OLTP), not that this demo collapses them.
-- **tmpfs PGDATA** — boot is ~1 s, container restart wipes data. Exactly the "in-memory" semantics asked for. Flip one compose line to switch to a named volume if needed.
-- **Port 5433 on the host** — keeps any existing local Postgres on 5432 untouched.
-- **pgcrypto** for `gen_random_uuid()` so application code never has to generate UUIDs for the DB to accept — keeps inserts simple.
-- **`ivfflat` with `lists=100`** — fine up to ~1M rows. Emits a "low recall" notice on an empty table; harmless. Will tune in Step 3.
-- **Soft delete** via `deleted_at` + partial indexes — `WHERE deleted_at IS NULL`. Lets history reads stay correct after a `DELETE` event.
-- **CHECK constraints** on `event` and `status` columns — push schema invariants into the DB instead of trusting application code.
-- **Raw `.sql` migrations** for now — moving to Alembic in Step 3 once we have SQLAlchemy models. Avoids dragging in Alembic for one file.
-
-**Verified**
-
-| Check | Command | Expected | Got |
-| ----- | ------- | -------- | --- |
-| Container up + healthy | `just up-db` | `pg_isready` returns | ✅ |
-| Schema applied | `just migrate` | "migrations done" | ✅ |
-| Extensions present | `just db-sql "SELECT extname FROM pg_extension WHERE extname IN ('vector','pgcrypto') ORDER BY extname;"` | `pgcrypto`, `vector` | ✅ |
-| Tables present | `just db-sql "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename;"` | `add_events`, `memories`, `memory_history` | ✅ |
-| 1536-dim vector round-trip | insert with `array_fill(0.1, ARRAY[1536])::vector`, cosine distance to self | distance `0` | ✅ |
-| Quality gate still green | `just check` | exit 0 | ✅ |
-
-**Notes**
-
-- `tmpfs` means restart = data loss. If you `docker compose restart db`, the next thing you must do is `just migrate`. The full demo flow will encode this in `just up`.
-- Hit one snag: `just`'s `*ARGS` passthrough mangles quoted SQL when paired with `set shell := ["bash", "-cu"]`. Split into two recipes — `db-shell` (interactive) and `db-sql SQL` (one-shot, uses `{{quote(SQL)}}`).
+Snag worth flagging: Restate defaults to HTTP/2 for service discovery, and
+uvicorn doesn't speak h2c without TLS. Fix: pass `use_http_11: true` in the
+deployment payload. Standard pitfall.
 
 ---
 
-## Discipline change — TDD goes in writing
+## Next session
 
-PLAN.md was rewritten to make **intense TDD** the spine, not a footnote.
+Open Phase 4 — the OpenRouter wrapper. The first failing tests to write
+(`tests/unit/llm/`):
 
-Highlights:
+1. `test_extract_facts.py::test_parses_clean_json_response`
+2. `test_extract_facts.py::test_strips_markdown_fences`
+3. `test_extract_facts.py::test_strips_think_tags`
+4. `test_extract_facts.py::test_retries_on_429`
+5. `test_decide_actions.py::test_remaps_uuids_to_small_ints`
+6. `test_decide_actions.py::test_remaps_response_back_to_uuids`
 
-- **Red → Green → Refactor** per sub-step, committed in that order. Each commit
-  either adds a failing test or makes one green.
-- **Test taxonomy** with explicit markers: `integration`, `e2e`, `chaos`,
-  `live`. CI runs `not chaos and not live` by default.
-- **Mocking boundaries** spelled out:
-  - LLM (OpenRouter): `respx` mocks at the `httpx` transport everywhere; one
-    optional `@pytest.mark.live` smoke per LLM function.
-  - Embeddings: deterministic stub function for all tests.
-  - Postgres + pgvector: **never mocked** — real container via
-    `testcontainers-postgres` for integration, the compose db for e2e.
-  - Restate Context: fake `Context` records `ctx.run` calls for unit tests;
-    real runtime for integration / e2e / chaos.
-  - Time / UUIDs: `time-machine` + `monkeypatch` for determinism.
-- **Coverage floor** in `just check`: ramps 80% (after Step 2) → 85% → 90% →
-  92%.
-- **Per-step red-test lists** — every step now opens with the exact failing
-  tests to write before any production code lands.
-
-Mem0 cares about quality and the senior signal here is "I work tests-first and
-treat the mock boundary as architecture." This change makes that legible in the
-plan itself.
-
-## Next up — Phase 2
-
-Stand up FastAPI with the full Mem0 v1 endpoint surface as 501 stubs. **Tests
-first** per PLAN.md Step 2:
-
-1. `test_healthz_returns_ok`
-2. `test_openapi_lists_v1_paths`
-3. `test_openapi_includes_pydantic_schemas`
-4. `test_stub_endpoints_return_501`
-5. `test_invalid_payload_returns_422`
-
-Dev deps to add this phase: `fastapi`, `httpx`, `respx`, `pytest-cov`,
-`time-machine`. Coverage floor flips on at 80%.
+Then implementation in `src/prepr_mem0/llm/` with `openrouter.py`,
+`prompts.py` (lifted with attribution from `mem0/configs/prompts.py`),
+`sanitize.py` (fence + `<think>` strip, fact normalization), `extract.py`,
+`decide.py`. The chaos demo in Phase 6 depends on these calls being
+respx-mockable, which they are by virtue of going through `httpx`.

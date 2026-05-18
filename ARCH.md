@@ -1,8 +1,9 @@
 # ARCH — Durable Mem0-style API on Restate + FastAPI
 
-> Demo target: replicate Mem0's most interesting flow — `Memory.add()` — on a durable
-> workflow engine, behind a typed REST API, with an auto-generated SDK, in a single
-> `docker compose up`. Audience: Mem0 senior backend interview.
+> Project goal: replicate the most interesting flow in Mem0's open-source memory
+> system — `Memory.add()` — on a durable workflow engine, behind a typed REST API,
+> in a single `docker compose up`. Built as a study of where durable execution
+> earns its keep when an API does multiple LLM calls plus reconciling writes.
 
 ## 1. Why this shape
 
@@ -118,9 +119,9 @@ CREATE TABLE add_events (                  -- mirrors Platform V3 async_mode eve
 ```
 
 This deliberately collapses Mem0's split (Qdrant + SQLite) into one Postgres so the
-demo has one moving part less. The interview talking point is *why* you'd split them
-at scale (different IO profiles, vector index hot-path doesn't want OLTP locks) —
-not *that* this demo splits them.
+demo has one moving part less. At real scale you'd split them again — different
+IO profiles, vector index hot-path doesn't want OLTP locks — but for this
+project, one container, one truth source.
 
 ## 5. Public API surface
 
@@ -196,7 +197,7 @@ Use the `openai` Python SDK with `base_url="https://openrouter.ai/api/v1"` and
 Both calls go through `instructor` or a hand-rolled JSON-schema response so we get
 typed outputs without parser yak-shaving. Embedding via OpenRouter's embedding
 endpoint (or fall back to `text-embedding-3-small` direct if OpenRouter doesn't
-proxy that model on demo day).
+proxy that model).
 
 ## 8. Generated SDK
 
@@ -236,10 +237,10 @@ Test layers:
 - **Unit** — pure functions: prompt builders, UUID remapper, action applier.
 - **Integration** — real Postgres via `testcontainers`; real Restate via the
   compose stack; OpenRouter mocked at the `httpx` transport layer with `respx`.
-- **E2E** — `just demo` script the agent (or the interviewer) runs, asserts on
-  exit codes and JSON shapes.
+- **E2E** — `just demo` script that runs the full path and asserts on exit
+  codes and JSON shapes.
 
-## 10. Non-goals (call out in interview)
+## 10. Non-goals
 
 - Graph memory — Mem0's Neptune/Neo4j layer is a separate workflow; same shape.
 - Multi-tenant auth — single `X-Api-Key` header gate, no orgs/projects.
@@ -247,16 +248,14 @@ Test layers:
 - Production deployment — Restate has a hosted offering, but the demo is
   self-contained docker-compose.
 
-## 11. The 30-second pitch (interview-ready)
+## 11. The thirty-second summary
 
-> "Mem0's `add` is two LLM calls and a reconciling write across a vector store and
-> a history table. That's exactly the workload durable execution was built for, so
-> I put Restate in front of it: the FastAPI edge does nothing but enqueue an `add`
-> workflow and hand back an event ID — same shape as your Platform V3
-> `async_mode`. Each LLM call and each DB write is a journaled side effect, so a
-> mid-workflow crash doesn't charge OpenRouter twice or leave half-written
-> history. The whole API is typed end-to-end: Pydantic models drive the OpenAPI
-> spec, `openapi-python-client` regenerates a typed SDK in CI, and ruff +
-> pyright-strict gate the merges. One `just up` brings the whole thing up; one
-> `just demo` runs the golden path plus a forced-crash chaos test that shows the
-> workflow resuming from its journal."
+Mem0's `add` is two LLM calls and a reconciling write across a vector store and
+a history table. That's exactly the workload durable execution was built for,
+so this project puts Restate in front of it: the FastAPI edge enqueues an
+`add` workflow and hands back an event ID — the same shape as Mem0's Platform
+V3 `async_mode`. Each LLM call and each DB write is a journaled side effect,
+so a mid-workflow crash doesn't charge OpenRouter twice or leave half-written
+history. One `just up` brings the whole thing up; one `just demo` runs the
+golden path plus a forced-crash test that shows the workflow resuming from
+its journal.

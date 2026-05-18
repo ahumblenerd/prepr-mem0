@@ -6,7 +6,7 @@ Each step lists:
   the order they should be written. This is the spine; everything else hangs
   off it.
 - **Deliverable** — what gets added to the repo to turn those tests green.
-- **Run** — exact command(s) an agent or interviewer types.
+- **Run** — exact command(s) to execute the step.
 - **Verify** — deterministic assertion an agent can check (exit code, HTTP
   status, JSON shape). If `Verify` doesn't pass, the step is not done.
 
@@ -404,7 +404,7 @@ just chaos
 **Verify:** test class green; the `respx` call counter assertion is what
 proves durable execution rather than naive retry.
 
-This is the interview centerpiece. Practice the narrative.
+This is the project's headline behavior.
 
 ---
 
@@ -498,7 +498,7 @@ Coverage ≥ 92%.
 
 ---
 
-## Stretch (only if Sunday morning Arun is feeling it)
+## Stretch
 
 - TypeScript SDK via `@hey-api/openapi-ts` + a `node sdk-ts/smoke.mjs`. Same
   add → poll → search shape.
@@ -512,17 +512,14 @@ Coverage ≥ 92%.
 
 ---
 
-## What the interviewer should walk away with
+## What this project demonstrates
 
-1. Deep understanding of Mem0's `add` pipeline — two LLM calls, UUID
-   anti-hallucination trick, reconcile semantics, SQLite history schema, V3
-   `async_mode` event contract.
-2. Right tool, right reason — Restate because the partial-write + retry
-   surface is exactly the durable-execution sweet spot, not because durable
-   workflows are trendy.
-3. Tests-first end-to-end — every behavior in the system has a failing test
-   that came before the code, and the chaos test proves the durability claim
-   isn't theater.
-4. Reproducible: one `just up`, one `just demo`. Generated SDK, strict lint
-   gate, coverage floor. That's what "best DX devs can get" actually looks
-   like.
+1. Deep modeling of Mem0's `add` pipeline — two LLM calls, UUID anti-hallucination
+   trick, reconcile semantics, SQLite-history schema, V3 `async_mode` event
+   contract — reproduced on a different runtime.
+2. Durable execution where it earns its keep: the partial-write + retry surface
+   between two LLM calls and a multi-row mutation.
+3. Tests-first: every behavior has a test that came before the code; the chaos
+   test makes the durability claim verifiable, not rhetorical.
+4. Reproducible: one `just up`, one `just demo`. Strict lint gate, coverage
+   floor, all under a single task runner.
