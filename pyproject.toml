@@ -76,6 +76,17 @@ unfixable = ["F401"]  # don't silently remove unused imports during a fix
 "src/prepr_mem0/__init__.py" = ["D104"]
 # Prompts are verbatim assets from upstream mem0; line length is theirs.
 "src/prepr_mem0/llm/prompts.py" = ["E501"]
+# Chaos test orchestrates subprocesses + a fake HTTP server.
+"tests/chaos/**" = [
+  "S603", "S607",      # subprocess + partial path are the point
+  "S110",              # poll loops swallow expected ConnectionError
+  "ASYNC230", "ASYNC240",  # fake server + tests do small sync FS reads
+  "BLE001",            # broad except in poll loops is intentional
+  "SIM105", "SIM115",  # contextlib.suppress is overkill for a one-liner; log files stay open
+  "TRY300",            # try/return is fine for poll-and-retry loops
+  "PLC0415", "ARG001", # dynamic reimport for a fixture is the point
+  "F401",              # the orchestration test uses dynamic imports
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -114,7 +125,7 @@ exclude_dirs = ["tests", "sdk-python", ".venv"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
-addopts = "-x --strict-markers --strict-config --cov=src/prepr_mem0 --cov-report=term-missing --cov-fail-under=85"
+addopts = "-x --strict-markers --strict-config --cov=src/prepr_mem0 --cov-report=term-missing --cov-fail-under=85 -m 'not chaos'"
 testpaths = ["tests"]
 markers = [
   "integration: hits real services (Postgres, Restate)",

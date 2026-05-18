@@ -11,7 +11,7 @@ Live tracker for the build laid out in [PLAN.md](./PLAN.md). Each phase has a
 | 3 — Restate runtime + echo workflow | done | `just up` composes pg + restate + worker + register; `curl :8080/memory/echo` round-trips through the runtime |
 | 4 — OpenRouter wrapper + Mem0 prompts | done | `extract_facts` + `decide_actions` typed wrappers, prompts lifted verbatim, 25 respx-mocked tests, coverage 91% |
 | 5 — Durable `add_memory` E2E | done | six-step `ctx.run` workflow registered with Restate; `POST /v1/memories` send-invokes it and returns PENDING; 47 tests, 93.7% coverage |
-| 6 — Chaos test (the headline) | next | kill worker mid-extract; assert fake OpenRouter call count == 2 |
+| 6 — Chaos test (the headline) | wip | code + 5 supporting tests green; kill-and-replay run blocked on Docker — see Phase 6 note |
 
 ---
 
@@ -150,23 +150,73 @@ ingress, so `httpx[http2]` (which pulls in `h2`) had to go into the
 project dependencies. Without it, `restate_client()` raises an
 ImportError at first connect.
 
+## Phase 6 — wip (code complete, end-to-end run not yet green)
+
+All the code is written:
+
+- `src/prepr_mem0/workflow/chaos.py` — `maybe_crash(hook)` that
+  `os._exit(1)`s when `CHAOS_AT==hook`. Bypasses `sys.exit`'s
+  `SystemExit` (the Restate SDK would otherwise catch it and turn the
+  workflow into a `FAILED` status, defeating the test).
+- `src/prepr_mem0/workflow/add_memory.py` plants
+  `maybe_crash("after_extract_facts")` right after the extract step.
+- `tests/chaos/fake_openrouter.py` — tiny FastAPI app on :9999 serving
+  canned `/chat/completions` JSON and appending each request to
+  `/tmp/openrouter_calls.jsonl`. Survives the worker dying, so it's the
+  durable call counter the test asserts against.
+- `tests/chaos/test_resume_after_crash.py` — orchestrates the kill /
+  restart / poll, marked `@pytest.mark.chaos` so it's excluded from
+  `just check`.
+- `scripts/chaos.sh` + `just chaos` target.
+
+**Supporting tests green** (`just check` runs them since they're
+unmarked):
+
+- `tests/chaos/test_chaos_hook.py` — 3 tests, each spawns a subprocess
+  and asserts the exit code (1 when env set, 0 otherwise, 0 on hook
+  name mismatch).
+- `tests/chaos/test_fake_openrouter.py` — 2 tests, verify the server
+  records each call to the configured jsonl path and returns
+  extract-shaped vs decide-shaped responses correctly.
+
+Total: 52 tests green, 1 chaos test deselected, 93.3% coverage.
+
+**Snags fixed during the attempt:**
+
+1. `generic_send` defaulted to `application/octet-stream` because
+   `BytesSerde` doesn't set a content-type. Restate's workflow
+   declares `application/json` input, so it rejected with 400. Fix:
+   pass `headers={"content-type": "application/json"}` to
+   `generic_send` in `api/app.py`.
+2. `kill-api` / `kill-worker` trusted the `.pid` file blindly — if the
+   pid was stale, the old uvicorn kept the port, and the new one
+   silently failed to bind. Fix: both kill recipes now also
+   `lsof -ti:<port> | xargs kill -9` to free the port.
+3. `ctx.run("step", lambda: async_fn(...))` failed inside the worker
+   with `TypeError: Object of type coroutine is not JSON serializable`.
+   The Restate SDK checks `inspect.iscoroutinefunction(action)` — that
+   returns `False` for a bare lambda even when the lambda returns a
+   coroutine, so the SDK tried to JSON-encode the coroutine object.
+   Fix: rewrite every `ctx.run(...)` call to use
+   `functools.partial(async_fn, ...)`, which `iscoroutinefunction`
+   *does* recognize.
+
+**What's blocking the green run:** Orbstack/Docker has been flaky on
+this machine — went down twice mid-test, taking the Postgres + Restate
+containers with it. The Python code is ready; rerunning needs
+`just up && just api && just chaos` against a stable Docker.
+
 ## Next session
 
-Open Phase 6 — the chaos test.
-
-Build order:
-
-1. `tests/chaos/fake_openrouter.py` — a tiny FastAPI app on :9999 that
-   serves canned `/chat/completions` responses and appends each request
-   to `/tmp/openrouter_calls.jsonl`. The file is the durable call
-   counter across worker restarts.
-2. `src/prepr_mem0/workflow/chaos.py` — `maybe_crash(hook)` that calls
-   `os._exit(1)` when `CHAOS_AT=$hook` is set. Wire one call into the
-   workflow body right after `extract_facts` completes.
-3. `tests/chaos/test_resume_after_crash.py` — wipe the jsonl, start
-   the fake server, restart the worker with `CHAOS_AT=after_extract_facts`
-   and `OPENROUTER_BASE_URL=http://host.docker.internal:9999`, POST,
-   wait for crash, restart worker without `CHAOS_AT`, poll until
-   SUCCEEDED, assert the jsonl line count is exactly 2.
-4. `just chaos` target + `scripts/chaos.sh` wrapper.
-5. Bump coverage floor / re-verify.
+1. `just up && just api`. Confirm `curl :8000/healthz` returns 200 and
+   the registration response lists both `memory.echo` and
+   `add_memory.run`.
+2. `just chaos`. Expected green output: `extract_facts +
+   decide_actions calls: 2 OK`. If it's 3, the partial→async fix
+   didn't stick and extract was re-executed instead of replayed —
+   check `inspect.iscoroutinefunction(partial(...))` on this Python
+   version.
+3. Update progress.md status table Phase 6 to `done`.
+4. Stretch: write `just demo` that runs the golden path (POST → poll
+   for SUCCEEDED → query memories) and then the chaos run, printing
+   `DEMO OK` if both pass.

@@ -24,6 +24,8 @@ sdk-python/.venv/
 .api.pid
 .worker.log
 .api.log
+.fake_openrouter.log
+.claude/
 docs.md
 docs/
 .coverage

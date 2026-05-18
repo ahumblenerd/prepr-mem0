@@ -110,7 +110,9 @@ worker:
 
 # Kill the worker (used by chaos tests).
 kill-worker:
-    @if [ -f .worker.pid ]; then kill $(cat .worker.pid) 2>/dev/null || true; rm .worker.pid; echo "worker killed"; else echo "no worker pid"; fi
+    @if [ -f .worker.pid ]; then kill -9 $(cat .worker.pid) 2>/dev/null || true; rm .worker.pid; fi
+    @lsof -ti:9080 | xargs -r kill -9 2>/dev/null || true
+    @echo "worker killed"
 
 # Register the worker with Restate.
 register:
@@ -134,4 +136,12 @@ api:
     fi
 
 kill-api:
-    @if [ -f .api.pid ]; then kill $(cat .api.pid) 2>/dev/null || true; rm .api.pid; echo "api killed"; fi
+    @if [ -f .api.pid ]; then kill -9 $(cat .api.pid) 2>/dev/null || true; rm .api.pid; fi
+    @lsof -ti:8000 | xargs -r kill -9 2>/dev/null || true
+    @echo "api killed"
+
+# --- Phase 6: chaos test -----------------------------------------------------
+
+# Run the kill-the-worker-mid-flight resume test. Needs `just up && just api`.
+chaos:
+    @./scripts/chaos.sh

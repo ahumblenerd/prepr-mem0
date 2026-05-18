@@ -58,6 +58,7 @@ async def add_memories(req: AddRequest) -> AddResult:
             handler="run",
             arg=payload,
             key=str(event_id),
+            headers={"content-type": "application/json"},
         )
     return AddResult(event_id=event_id, status="PENDING")
 
