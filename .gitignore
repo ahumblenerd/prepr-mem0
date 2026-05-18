@@ -31,3 +31,4 @@ docs/
 .coverage
 htmlcov/
 .cache/
+.fake_openrouter.pid

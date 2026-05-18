@@ -24,7 +24,7 @@ class Settings:
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
             openrouter_model=os.environ.get(
                 "OPENROUTER_MODEL",
-                "openrouter/anthropic/claude-haiku-4-5",
+                "anthropic/claude-haiku-4.5",
             ),
             openrouter_base_url=os.environ.get(
                 "OPENROUTER_BASE_URL",
